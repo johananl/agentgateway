@@ -337,8 +337,10 @@ function mapToHostBackend(data: any): HostBackend | undefined {
 function mapToMcpBackend(data: any): McpBackend | undefined {
   if (typeof data?.name !== "string" || !Array.isArray(data?.target?.targets)) return undefined;
   const targets = data.target.targets.map(mapToMcpTarget).filter(Boolean) as McpTarget[];
-  // Include namespace in name to match route backend reference format "namespace/name"
-  const fullName = data.namespace ? `${data.namespace}/${data.name}` : data.name;
+  // Always use "namespace/name" format to match route backend reference keys
+  // (mirrors Rust Display for ResourceName which always formats as "{namespace}/{name}")
+  const namespace = typeof data.namespace === "string" ? data.namespace : "";
+  const fullName = `${namespace}/${data.name}`;
   return {
     name: fullName,
     targets, // Flat structure for UI and write path

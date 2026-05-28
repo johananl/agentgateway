@@ -2463,7 +2463,36 @@ async fn convert_mcp_config(
 	let resolved_policies = if let Some(pol) = policies {
 		split_policies(client.clone(), pol, config.as_policy_context(&route_key)).await?
 	} else {
-		ResolvedPolicies::default()
+		// When no policies are specified, inject a default CORS policy so the admin UI
+		// (served from the admin port) can connect to the MCP proxy port.
+		let admin_port = config.admin_addr.port();
+		let default_cors = http::cors::CorsSerde {
+			allow_origins: vec![
+				format!("http://localhost:{admin_port}"),
+				format!("http://127.0.0.1:{admin_port}"),
+			],
+			allow_methods: vec![
+				"GET".to_string(),
+				"POST".to_string(),
+				"DELETE".to_string(),
+				"OPTIONS".to_string(),
+			],
+			allow_headers: vec![
+				"content-type".to_string(),
+				"cache-control".to_string(),
+				"mcp-protocol-version".to_string(),
+				"mcp-session-id".to_string(),
+			],
+			expose_headers: vec!["mcp-session-id".to_string()],
+			allow_credentials: false,
+			max_age: None,
+		};
+		ResolvedPolicies {
+			route_policies: vec![TrafficPolicy::CORS(RequestPolicy::single(
+				http::cors::Cors::try_from(default_cors)?,
+			))],
+			..Default::default()
+		}
 	};
 
 	let mut routes = Vec::new();

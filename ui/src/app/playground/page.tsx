@@ -274,7 +274,8 @@ export default function PlaygroundPage() {
         if (listener.routes) {
           listener.routes.forEach((route: Route, routeIndex: number) => {
             const protocol = listener.protocol === ListenerProtocol.HTTPS ? "https" : "http";
-            const hostname = listener.hostname || "localhost";
+            const hostname =
+              !listener.hostname || listener.hostname === "*" ? "localhost" : listener.hostname;
             const port = bind.port; // Use the actual port from the bind configuration
             const baseEndpoint = `${protocol}://${hostname}:${port}`;
 
@@ -997,11 +998,10 @@ export default function PlaygroundPage() {
                                           <span>
                                             {hasA2aPolicy && !hasBackends
                                               ? "A2A Traffic"
-                                              : `${routeInfo.route.backends?.length || 0} backend${
-                                                  (routeInfo.route.backends?.length || 0) !== 1
-                                                    ? "s"
-                                                    : ""
-                                                }`}
+                                              : `${routeInfo.route.backends?.length || 0} backend${(routeInfo.route.backends?.length || 0) !== 1
+                                                ? "s"
+                                                : ""
+                                              }`}
                                           </span>
                                         </div>
 
@@ -1219,10 +1219,10 @@ export default function PlaygroundPage() {
                             </div>
                           );
                         }) || (
-                          <div className="text-xs text-muted-foreground">
-                            No backends configured
-                          </div>
-                        )}
+                            <div className="text-xs text-muted-foreground">
+                              No backends configured
+                            </div>
+                          )}
                       </div>
                     </div>
                     {selectedRoute.route.policies &&
