@@ -9,6 +9,13 @@ cluster_name = 'kind'
 install_namespace = k8s_namespace()
 image_registry = 'localhost:5000'
 
+# Detect host architecture for cross-compilation
+host_arch = str(local('uname -m', quiet=True)).strip()
+if host_arch == 'arm64' or host_arch == 'aarch64':
+    rust_target = 'aarch64-unknown-linux-gnu'
+else:
+    rust_target = 'x86_64-unknown-linux-gnu'
+
 # Ensure Kind cluster exists
 allow_k8s_contexts('kind-' + cluster_name)
 
@@ -59,7 +66,10 @@ docker_build_with_restart(
     entrypoint='/usr/local/bin/agentgateway-controller',
     dockerfile_contents="""
 FROM ubuntu:24.04
-COPY agentgateway-controller /usr/local/bin/agentgateway-controller
+RUN useradd -r -u 65532 -s /usr/sbin/nologin agentgateway
+RUN chown agentgateway:agentgateway /usr/local/bin
+COPY --chown=agentgateway:agentgateway agentgateway-controller /usr/local/bin/agentgateway-controller
+USER 65532
 ENTRYPOINT /usr/local/bin/agentgateway-controller
     """,
     # Live update: sync Go binaries
@@ -105,7 +115,7 @@ k8s_resource('agentgateway',
 
 local_resource(
   'rust-compile-dataplane',
-  'cargo build && if [ -f "./tools/tilt/agentgateway" ]; then rm "./tools/tilt/agentgateway"; fi && mv ./target/debug/agentgateway ./tools/tilt/agentgateway',
+  'cross build --target ' + rust_target + ' && if [ -f "./tools/tilt/agentgateway" ]; then rm "./tools/tilt/agentgateway"; fi && mv ./target/' + rust_target + '/debug/agentgateway ./tools/tilt/agentgateway',
   deps=['./crates',
         './Cargo.toml',
         './Cargo.lock',

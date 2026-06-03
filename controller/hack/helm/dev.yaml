@@ -8,3 +8,11 @@ controller:
     # rollingUpdate:
     #   maxSurge: 100%
     #   maxUnavailable: 100%
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 65532
+  capabilities:
+    drop:
+    - ALL
