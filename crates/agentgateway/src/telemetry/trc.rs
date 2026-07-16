@@ -15,6 +15,7 @@ use opentelemetry_sdk::trace::{
 	SpanProcessor,
 };
 pub use traceparent::TraceParent;
+pub(crate) use traceparent::side_call_traceparent;
 
 use crate::cel;
 use crate::telemetry::log::{CelLoggingExecutor, LoggingFields, RequestLog};
@@ -668,6 +669,9 @@ mod traceparent {
 				flags: 0,
 			}
 		}
+		pub fn to_header_value(&self) -> Option<http::HeaderValue> {
+			http::HeaderValue::from_str(&format!("{self:?}")).ok()
+		}
 		pub fn insert_header(&self, req: &mut Request) {
 			let hv = hyper::header::HeaderValue::from_bytes(format!("{self:?}").as_bytes()).unwrap();
 			req.headers_mut().insert(TRACEPARENT, hv);
@@ -741,6 +745,17 @@ mod traceparent {
 			})
 		}
 	}
+
+	/// Returns the traceparent to propagate for outbound side calls, if any.
+	/// Prefers the gateway-selected traceparent from request extensions and falls
+	/// back to a valid inbound traceparent header.
+	pub(crate) fn side_call_traceparent(req: &Request) -> Option<TraceParent> {
+		req
+			.extensions()
+			.get::<TraceParent>()
+			.cloned()
+			.or_else(|| TraceParent::from_request(req))
+	}
 }
 
 #[cfg(test)]
@@ -751,12 +766,15 @@ mod tests {
 	use std::time::Instant;
 
 	use agent_core::{Timestamp, strng};
+	use agent_http::x_headers::TRACEPARENT;
+	use hyper::Method;
 	use opentelemetry::trace::SpanKind;
 	use opentelemetry_sdk::error::OTelSdkResult;
 	use opentelemetry_sdk::trace::{SimpleSpanProcessor, SpanData, SpanExporter};
 	use prometheus_client::registry::Registry;
 
 	use super::*;
+	use crate::http;
 	use crate::llm::cost::ModelCatalog;
 	use crate::telemetry::log::{
 		CelLogging, CelLoggingExecutor, LoggingFields, MetricFields, RequestLog,
@@ -992,5 +1010,38 @@ mod tests {
 			let exec = Executor::new_empty();
 			assert!(should_export_span(None, &exec));
 		}
+	}
+
+	#[test]
+	fn side_call_traceparent_prefers_extension_then_header() {
+		let header_span = TraceParent::new();
+		let extension_span = header_span.new_span();
+		let mut req = ::http::Request::builder()
+			.uri("http://example.com/")
+			.body(crate::http::Body::empty())
+			.unwrap();
+
+		header_span.insert_header(&mut req);
+		assert_eq!(side_call_traceparent(&req), Some(header_span.clone()));
+
+		req.extensions_mut().insert(extension_span.clone());
+		assert_eq!(side_call_traceparent(&req), Some(extension_span));
+
+		let req = ::http::Request::builder()
+			.uri("http://example.com/")
+			.body(crate::http::Body::empty())
+			.unwrap();
+		assert_eq!(side_call_traceparent(&req), None);
+	}
+
+	#[test]
+	fn from_request_returns_none_for_malformed_values() {
+		let req = ::http::Request::builder()
+			.method(Method::GET)
+			.uri("http://example.com")
+			.header(TRACEPARENT, "oops")
+			.body(http::Body::empty())
+			.unwrap();
+		assert_eq!(TraceParent::from_request(&req), None);
 	}
 }

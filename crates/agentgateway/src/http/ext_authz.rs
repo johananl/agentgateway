@@ -811,6 +811,19 @@ impl ExtAuthz {
 				http::HeaderMutationAction::OverwriteIfExistsOrAdd,
 			);
 		}
+
+		// Propagate trace context to the authorization request.
+		if !check_req
+			.headers()
+			.contains_key(http::x_headers::TRACEPARENT)
+			&& let Some(traceparent) = trc::side_call_traceparent(req)
+			&& let Some(value) = traceparent.to_header_value()
+		{
+			check_req
+				.headers_mut()
+				.insert(http::x_headers::TRACEPARENT, value);
+		}
+
 		// Set the default request timeout. This can be overridden by a timeout on the Backend object itself.
 		check_req
 			.extensions_mut()
