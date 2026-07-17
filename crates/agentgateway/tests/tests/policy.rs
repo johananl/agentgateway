@@ -1,3 +1,4 @@
+use agentgateway::telemetry::trc::TraceParent;
 use agentgateway::test_helpers::extauthmock;
 
 use crate::common::prelude::*;
@@ -284,6 +285,120 @@ async fn gateway_http_ext_authz_body_expression_sets_auth_request_body() {
 		})
 	);
 	assert_eq!(body.body.as_ref(), b"original");
+}
+
+#[tokio::test]
+async fn gateway_http_ext_authz_propagates_traceparent_by_default() {
+	let (_mock, mut bind, io) = basic_setup().await;
+	let authz = MockServer::start().await;
+	Mock::given(wiremock::matchers::any())
+		.respond_with(move |req: &wiremock::Request| {
+			ResponseTemplate::new(StatusCode::OK.as_u16()).insert_header(
+				"x-authz-body",
+				String::from_utf8(req.body.clone()).expect("authz request body is utf8"),
+			)
+		})
+		.mount(&authz)
+		.await;
+
+	bind
+		.attach_gateway_policy(json!({
+			"extAuthz": {
+				"host": authz.address().to_string(),
+				"protocol": {"http": {}},
+				"cache": {
+					"key": ["request.path"],
+					"ttl": "60s",
+				},
+			},
+		}))
+		.await;
+
+	const INBOUND_TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+	let res = send_request_headers(
+		io.clone(),
+		Method::POST,
+		"http://lo/p",
+		&[(
+			agentgateway::http::x_headers::TRACEPARENT.as_str(),
+			INBOUND_TRACEPARENT,
+		)],
+	)
+	.await;
+	assert_eq!(res.status(), StatusCode::OK);
+	let requests = authz
+		.received_requests()
+		.await
+		.expect("no requests to auth server");
+	assert_eq!(requests.len(), 1);
+	let authz_traceparent_header = requests[0]
+		.headers
+		.get(agentgateway::http::x_headers::TRACEPARENT)
+		.expect("authz request is missing traceparent")
+		.to_str()
+		.expect("traceparent is not valid ASCII");
+	let authz_traceparent =
+		TraceParent::try_from(authz_traceparent_header).expect("authz traceparent is malformed");
+	let inbound_traceparent =
+		TraceParent::try_from(INBOUND_TRACEPARENT).expect("inbound traceparent fixture is malformed");
+	assert_eq!(authz_traceparent.version, inbound_traceparent.version);
+	assert_eq!(authz_traceparent.trace_id, inbound_traceparent.trace_id);
+	// The authz side call should stay on the inbound trace with its own span ID.
+	assert_ne!(authz_traceparent.span_id, inbound_traceparent.span_id);
+	assert_eq!(authz_traceparent.flags, inbound_traceparent.flags);
+}
+
+#[tokio::test]
+async fn gateway_http_ext_authz_keeps_traceparent_from_add_request_headers() {
+	let (_mock, mut bind, io) = basic_setup().await;
+	let authz = MockServer::start().await;
+	Mock::given(wiremock::matchers::any())
+		.respond_with(ResponseTemplate::new(StatusCode::OK.as_u16()))
+		.mount(&authz)
+		.await;
+
+	const CONFIGURED_TRACEPARENT: &str = "00-11111111111111111111111111111111-2222222222222222-01";
+	bind
+		.attach_gateway_policy(json!({
+			"extAuthz": {
+				"host": authz.address().to_string(),
+				"protocol": {
+					"http": {
+						"addRequestHeaders": {
+							"traceparent": format!("\"{CONFIGURED_TRACEPARENT}\""),
+						},
+					},
+				},
+			},
+		}))
+		.await;
+
+	const INBOUND_TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+	let res = send_request_headers(
+		io.clone(),
+		Method::POST,
+		"http://lo/p",
+		&[(
+			agentgateway::http::x_headers::TRACEPARENT.as_str(),
+			INBOUND_TRACEPARENT,
+		)],
+	)
+	.await;
+	assert_eq!(res.status(), StatusCode::OK);
+	let requests = authz
+		.received_requests()
+		.await
+		.expect("no requests to auth server");
+	assert_eq!(requests.len(), 1);
+	assert_eq!(
+		requests[0]
+			.headers
+			.get(agentgateway::http::x_headers::TRACEPARENT)
+			.expect("authz request is missing traceparent")
+			.to_str()
+			.expect("traceparent is not valid ASCII"),
+		CONFIGURED_TRACEPARENT
+	);
 }
 
 #[tokio::test]
