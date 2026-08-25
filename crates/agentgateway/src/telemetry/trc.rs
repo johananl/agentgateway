@@ -670,10 +670,18 @@ mod traceparent {
 			}
 		}
 		pub fn to_header_value(&self) -> Option<http::HeaderValue> {
-			http::HeaderValue::from_str(&format!("{self:?}")).ok()
+			http::HeaderValue::from_str(&self.to_traceparent_string()).ok()
+		}
+		/// Converts the TraceParent to W3C wire format.
+		pub fn to_traceparent_string(&self) -> String {
+			format!(
+				"{:02x}-{:032x}-{:016x}-{:02x}",
+				self.version, self.trace_id, self.span_id, self.flags
+			)
 		}
 		pub fn insert_header(&self, req: &mut Request) {
-			let hv = hyper::header::HeaderValue::from_bytes(format!("{self:?}").as_bytes()).unwrap();
+			let hv =
+				hyper::header::HeaderValue::from_bytes(self.to_traceparent_string().as_bytes()).unwrap();
 			req.headers_mut().insert(TRACEPARENT, hv);
 		}
 		pub fn from_request(req: &Request) -> Option<Self> {
@@ -1043,5 +1051,19 @@ mod tests {
 			.body(http::Body::empty())
 			.unwrap();
 		assert_eq!(TraceParent::from_request(&req), None);
+	}
+
+	#[test]
+	fn traceparent_string_uses_w3c_wire_format() {
+		let value = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+		let traceparent = TraceParent::try_from(value).unwrap();
+		assert_eq!(traceparent.to_traceparent_string(), value);
+	}
+
+	#[test]
+	fn traceparent_header_value_uses_w3c_wire_format() {
+		let value = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+		let traceparent = TraceParent::try_from(value).unwrap();
+		assert_eq!(traceparent.to_header_value().unwrap(), value);
 	}
 }
